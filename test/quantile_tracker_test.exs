@@ -23,7 +23,7 @@ defmodule QuantileTrackerTest do
   end
 
   test "registered name" do
-    {:ok, _pid} = QuantileTracker.start_link([{0.5, 0.0001}], :estimator)
+    {:ok, _pid} = QuantileTracker.start_link([{0.5, 0.0001}], %{name: :estimator})
     assert {:error, :empty_stats} = QuantileTracker.quantiles(:estimator, [0.0])
   end
 

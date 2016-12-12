@@ -7,8 +7,8 @@ use GenServer
 
 ## API
 
-def start_link(targets, name \\ nil) when is_list(targets) do
-  GenServer.start_link(__MODULE__, {targets, name}, [])
+def start_link(targets, options \\ %{}) when is_list(targets) do
+  GenServer.start_link(__MODULE__, {targets, options}, [])
 end
 
 def quantiles(server, quantiles) when is_list(quantiles) do
@@ -26,8 +26,8 @@ end
 
 ## Server Callbacks
 
-def init({targets, name}) do
-  if name, do: Process.register(self(), name)
+def init({targets, options}) do
+  if Map.get(options, :name), do: Process.register(self(), options.name)
   estimator = targets
               |> :quantile_estimator.f_targeted
               |> :quantile_estimator.new
