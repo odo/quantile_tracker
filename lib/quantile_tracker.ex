@@ -1,6 +1,9 @@
 defmodule QuantileTracker do
 
+@compress_after 10
+
 use GenServer
+
 
 ## API
 
@@ -12,13 +15,13 @@ def quantiles(server, quantiles) when is_list(quantiles) do
   GenServer.call(server, {:quantiles, quantiles})
 end
 
-def record(server, number) when is_number(number) do
-  GenServer.cast(server, {:record, number})
+def record(server, value) when is_number(value) or is_list(value) do
+  GenServer.cast(server, {:record, value})
 end
 
 # for testing
-def record_as_call(server, number) when is_number(number) do
-  GenServer.call(server, {:record, number})
+def record_as_call(server, value) when is_number(value) or is_list(value) do
+  GenServer.call(server, {:record, value})
 end
 
 ## Server Callbacks
@@ -40,14 +43,29 @@ def handle_call({:quantiles, quantiles}, _from, state) do
     end
   {:reply, reply, state}
 end
-def handle_call({:record, number}, _from, state) do
-  {:noreply, next_state} = handle_cast({:record, number}, state)
+def handle_call({:record, value}, _from, state) do
+  {:noreply, next_state} = handle_cast({:record, value}, state)
   {:reply, :ok, next_state}
 end
 
-def handle_cast({:record, number}, state) do
-  next_estimator = :quantile_estimator.insert(number, state.estimator)
-  next_calls_since_compression = state.calls_since_compression + 1
+def handle_cast({:record, value}, state) when is_number(value) do
+  handle_cast({:record, [value]}, state)
+end
+def handle_cast({:record, values}, state) when is_list(values) do
+  value_chunks   = Enum.chunk(values, @compress_after, @compress_after, [])
+  {next_estimator, next_calls_since_compression}
+  = Enum.reduce(
+    value_chunks,
+    {state.estimator, state.calls_since_compression},
+    fn(chunk, {estimator, calls_since_compression}) ->
+      next_estimator = Enum.reduce(chunk, estimator, fn(value, est) -> :quantile_estimator.insert(value * 1.0, est) end)
+      next_calls_since_compression = calls_since_compression + length(chunk)
+      case next_calls_since_compression >= @compress_after do
+        true  -> {:quantile_estimator.compress(next_estimator), 0}
+        false -> {next_estimator, next_calls_since_compression}
+      end 
+    end
+  )
   next_state = %{estimator: next_estimator, calls_since_compression: next_calls_since_compression}
   {:noreply, maybe_compress(next_state)}
 end
