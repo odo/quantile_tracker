@@ -27,20 +27,35 @@ end
 ## Server Callbacks
 
 def init({targets, options}) do
-  if Map.get(options, :name), do: Process.register(self(), options.name)
+  if Map.get(options, :name),                      do: Process.register(self(), options.name)
+  if timed_flush = Map.get(options, :timed_flush), do: maybe_init_flush(timed_flush)
   estimator = targets
               |> :quantile_estimator.f_targeted
               |> :quantile_estimator.new
-  {:ok, %{estimator: estimator, calls_since_compression: 0}}
+  recorded_quantiles =
+    ([0.0]
+    ++ Enum.map(targets, fn({value, _}) -> value * 1.0 end)
+    ++ [1.0])
+    |> Enum.uniq
+  init_state = %{
+    estimator: estimator,
+    null_estimator: estimator,
+    calls_since_compression: 0,
+    recorded_quantiles: recorded_quantiles,
+    timed_flush: timed_flush,
+  }
+  {:ok, init_state}
+end
+
+def maybe_init_flush(nil) do
+  :noop
+end
+def maybe_init_flush({interval, _fun}) do
+  Process.send_after(self(), :flush, interval)
 end
 
 def handle_call({:quantiles, quantiles}, _from, state) do
-  reply = try do
-      get_quantile = fn(q) -> {q, :quantile_estimator.quantile(q, state.estimator)} end
-      quantiles |> Enum.map(get_quantile)
-    catch
-      {:error, :empty_stats} -> {:error, :empty_stats}
-    end
+  reply = quantiles_internal(state.estimator, quantiles)
   {:reply, reply, state}
 end
 def handle_call({:record, value}, _from, state) do
@@ -66,11 +81,28 @@ def handle_cast({:record, values}, state) when is_list(values) do
       end 
     end
   )
-  next_state = %{estimator: next_estimator, calls_since_compression: next_calls_since_compression}
+  next_state = %{state | estimator: next_estimator, calls_since_compression: next_calls_since_compression}
   {:noreply, maybe_compress(next_state)}
 end
 
+def handle_info(:flush, state = %{timed_flush: {interval, fun}}) do
+  quantiles  = quantiles_internal(state.estimator, state.recorded_quantiles)
+  fun.(quantiles)
+  Process.send_after(self(), :flush, interval)
+  next_state = %{state | estimator: state.null_estimator}
+  {:noreply, next_state}
+end
+
 ## Internal
+
+def quantiles_internal(estimator, quantiles) do
+  try do
+      get_quantile = fn(q) -> {q, :quantile_estimator.quantile(q, estimator)} end
+      quantiles |> Enum.map(get_quantile)
+    catch
+      {:error, :empty_stats} -> {:error, :empty_stats}
+    end
+end
 
 def maybe_compress(state = %{estimator: estimator, calls_since_compression: 100}) do
   next_estimator = :quantile_estimator.compress(estimator)

@@ -27,4 +27,13 @@ defmodule QuantileTrackerTest do
     assert {:error, :empty_stats} = QuantileTracker.quantiles(:estimator, [0.0])
   end
 
+  test "timed flush" do
+    me = self()
+    {:ok, qe} = QuantileTracker.start_link([{0.5, 0.0001}], %{timed_flush: {10, fn(quantiles) -> send(me, quantiles) end}})
+    QuantileTracker.record_as_call(qe, [0, 5, 10])
+    assert_receive [{0.0, 0.0}, {0.5, 5.0}, {1.0, 10.0}]
+    assert_receive {:error, :empty_stats}
+  end
+
+
 end
